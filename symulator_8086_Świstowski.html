@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Symulator 8086 MOV/XCHG — Filip Świstowski</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 18px; }
+    h2 { margin: 8px 0 6px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 10px; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 12px; }
+    label { display:block; font-size: 12px; color:#333; margin-bottom:6px; }
+    input, select, button { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { cursor: pointer; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    pre { background:#0b1020; color:#d7e1ff; padding: 10px; border-radius: 10px; overflow:auto; }
+    .small { font-size: 12px; color:#444; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+
+<h1>Prosty symulator 8086 (MOV/XCHG) — Filip Świstowski</h1>
+<p class="small">Wszystkie pola przyjmują wartości tylko w hex (0-9, A-F). Rejestry 16-bit, pamięć bajtowa. Adres efektywny: base + index + offset.</p>
+
+<div class="grid">
+  <div class="card">
+    <h2>Rejestry (16-bit)</h2>
+    <label>AX (hex)</label><input id="AX" class="mono" value="0000" maxlength="4" />
+    <label>BX (hex)</label><input id="BX" class="mono" value="0000" maxlength="4" />
+    <label>CX (hex)</label><input id="CX" class="mono" value="0000" maxlength="4" />
+    <label>DX (hex)</label><input id="DX" class="mono" value="0000" maxlength="4" />
+  </div>
+
+  <div class="card">
+    <h2>Adresowanie</h2>
+    <label>Tryb adresowania</label>
+    <select id="mode">
+      <option value="base">Bazowe (BX lub BP + offset)</option>
+      <option value="index">Indeksowe (SI lub DI + offset)</option>
+      <option value="baseIndex">Indeksowo-bazowe (BX/BP + SI/DI + offset)</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label>BP (hex)</label><input id="BP" class="mono" value="0000" maxlength="4" />
+      </div>
+      <div>
+        <label>SI (hex)</label><input id="SI" class="mono" value="0000" maxlength="4" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>DI (hex)</label><input id="DI" class="mono" value="0000" maxlength="4" />
+      </div>
+      <div>
+        <label>Offset (hex)</label><input id="OFF" class="mono" value="0000" maxlength="4" />
+      </div>
+    </div>
+
+    <label>Bazowy rejestr (dla trybu bazowego / bazowo-indeksowego)</label>
+    <select id="baseReg">
+      <option value="BX">BX</option>
+      <option value="BP">BP</option>
+    </select>
+
+    <label>Indeksowy rejestr (dla trybu indeksowego / bazowo-indeksowego)</label>
+    <select id="indexReg">
+      <option value="SI">SI</option>
+      <option value="DI">DI</option>
+    </select>
+
+    <button id="calcEA">Policz adres (EA)</button>
+    <div class="small">EA (hex): <span id="eaOut" class="mono">0000</span> (dec: <span id="eaDec">0</span>)</div>
+  </div>
+
+  <div class="card">
+    <h2>MOV: rejestr↔rejestr</h2>
+    <label>Dest</label>
+    <select id="movRR_dest">
+      <option>AX</option><option>BX</option><option>CX</option><option>DX</option>
+    </select>
+    <label>Src</label>
+    <select id="movRR_src">
+      <option>AX</option><option>BX</option><option>CX</option><option>DX</option>
+    </select>
+    <button id="movRR">Wykonaj MOV</button>
+
+    <h2 style="margin-top:12px;">XCHG: rejestr↔rejestr</h2>
+    <label>Reg1</label>
+    <select id="xchg_r1">
+      <option>AX</option><option>BX</option><option>CX</option><option>DX</option>
+    </select>
+    <label>Reg2</label>
+    <select id="xchg_r2">
+      <option>BX</option><option>AX</option><option>CX</option><option>DX</option>
+    </select>
+    <button id="xchgRR">Wykonaj XCHG</button>
+  </div>
+
+  <div class="card">
+    <h2>MOV: pamięć↔rejestr</h2>
+    <label>Rejestr (AX/BX/CX/DX)</label>
+    <select id="mem_reg">
+      <option>AX</option><option>BX</option><option>CX</option><option>DX</option>
+    </select>
+
+    <div class="row">
+      <button id="store">MOV [EA] ← REG (zapis słowa)</button>
+      <button id="load">MOV REG ← [EA] (odczyt słowa)</button>
+    </div>
+
+    <label>Podgląd pamięci: adres (hex)</label>
+    <input id="peekAddr" class="mono" value="0000" maxlength="4" />
+    <button id="peekBtn">Pokaż 16 bajtów od adresu</button>
+    <pre id="memDump" class="mono"></pre>
+
+    <button id="resetMem">Wyzeruj pamięć</button>
+  </div>
+</div>
+
+<h2>Dziennik</h2>
+<pre id="log" class="mono"></pre>
+
+<script>
+  // --- Utils (hex only) ---
+  const HEX_RE = /^[0-9a-fA-F]+$/;
+
+  function clamp16(n){ return n & 0xFFFF; }
+
+  function parseHex16(s, fieldName){
+    s = (s || "").trim();
+    if(s === "") throw new Error(fieldName + ": puste pole");
+    if(!HEX_RE.test(s)) throw new Error(fieldName + ": tylko hex (0-9,A-F)");
+    const v = parseInt(s, 16);
+    if(Number.isNaN(v) || v < 0 || v > 0xFFFF) throw new Error(fieldName + ": zakres 0000-FFFF");
+    return v;
+  }
+
+  function hex4(n){
+    return clamp16(n).toString(16).toUpperCase().padStart(4, "0");
+  }
+  function hex2(n){
+    return (n & 0xFF).toString(16).toUpperCase().padStart(2, "0");
+  }
+
+  function byId(id){ return document.getElementById(id); }
+
+  function getReg(name){
+    return parseHex16(byId(name).value, name);
+  }
+  function setReg(name, value){
+    byId(name).value = hex4(value);
+  }
+
+  function logLine(s){
+    const el = byId("log");
+    el.textContent = (s + "\n") + el.textContent;
+  }
+
+  // 64 KB memory (byte-addressed)
+  const MEM = new Uint8Array(65536);
+
+  function calcEA(){
+    const mode = byId("mode").value;
+    const off = parseHex16(byId("OFF").value, "Offset");
+
+    const BX = getReg("BX");
+    const BP = parseHex16(byId("BP").value, "BP");
+    const SI = parseHex16(byId("SI").value, "SI");
+    const DI = parseHex16(byId("DI").value, "DI");
+
+    const baseName = byId("baseReg").value;
+    const indexName = byId("indexReg").value;
+
+    const baseVal = (baseName === "BX") ? BX : BP;
+    const indexVal = (indexName === "SI") ? SI : DI;
+
+    let ea = 0;
+    if(mode === "base") ea = baseVal + off;
+    else if(mode === "index") ea = indexVal + off;
+    else ea = baseVal + indexVal + off; // baseIndex
+
+    ea = clamp16(ea);
+
+    byId("eaOut").textContent = hex4(ea);
+    byId("eaDec").textContent = String(ea);
+    return ea;
+  }
+
+  // word store/load: little-endian (low byte at EA)
+  function memWriteWord(addr, value){
+    addr = clamp16(addr);
+    MEM[addr] = value & 0xFF;
+    MEM[clamp16(addr + 1)] = (value >> 8) & 0xFF;
+  }
+  function memReadWord(addr){
+    addr = clamp16(addr);
+    const lo = MEM[addr];
+    const hi = MEM[clamp16(addr + 1)];
+    return (hi << 8) | lo;
+  }
+
+  function dump16(addr){
+    addr = clamp16(addr);
+    let out = "ADDR  ";
+    for(let i=0;i<16;i++) out += " " + hex2(i);
+    out += "\n" + hex4(addr) + ": ";
+    for(let i=0;i<16;i++){
+      out += " " + hex2(MEM[clamp16(addr + i)]);
+    }
+    return out;
+  }
+
+  function validateAllHexInputs(){
+    const inputs = document.querySelectorAll("input");
+    inputs.forEach(inp => {
+      const v = inp.value.trim();
+      if(v === "") return;
+      if(!HEX_RE.test(v)) throw new Error("Pole zawiera nie-hex: " + (inp.id || inp.name));
+      // limit length for register-like fields, but keep it simple
+    });
+  }
+
+  // --- Handlers ---
+  byId("calcEA").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const ea = calcEA();
+      logLine("EA = " + hex4(ea));
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("movRR").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const d = byId("movRR_dest").value;
+      const s = byId("movRR_src").value;
+      const sv = getReg(s);
+      setReg(d, sv);
+      logLine("MOV " + d + ", " + s + "  => " + d + "=" + hex4(sv));
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("xchgRR").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const r1 = byId("xchg_r1").value;
+      const r2 = byId("xchg_r2").value;
+      const v1 = getReg(r1);
+      const v2 = getReg(r2);
+      setReg(r1, v2);
+      setReg(r2, v1);
+      logLine("XCHG " + r1 + ", " + r2 + "  => " + r1 + "=" + hex4(v2) + ", " + r2 + "=" + hex4(v1));
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("store").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const ea = calcEA();
+      const r = byId("mem_reg").value;
+      const v = getReg(r);
+      memWriteWord(ea, v);
+      logLine("MOV [EA=" + hex4(ea) + "], " + r + "  => MEM[" + hex4(ea) + "]=" + hex4(v) + " (little-endian)");
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("load").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const ea = calcEA();
+      const r = byId("mem_reg").value;
+      const v = memReadWord(ea);
+      setReg(r, v);
+      logLine("MOV " + r + ", [EA=" + hex4(ea) + "]  => " + r + "=" + hex4(v));
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("peekBtn").addEventListener("click", () => {
+    try{
+      validateAllHexInputs();
+      const a = parseHex16(byId("peekAddr").value, "Podgląd adresu");
+      byId("memDump").textContent = dump16(a);
+      logLine("DUMP od " + hex4(a));
+    }catch(e){ alert(e.message); }
+  });
+
+  byId("resetMem").addEventListener("click", () => {
+    MEM.fill(0);
+    byId("memDump").textContent = "";
+    logLine("Pamięć wyzerowana (64KB).");
+  });
+
+  // Initial dump
+  byId("memDump").textContent = dump16(0);
+  calcEA();
+</script>
+
+</body>
+</html>
