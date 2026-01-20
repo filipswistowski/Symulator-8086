@@ -1,5 +1,7 @@
 # Symulator MOV/XCHG dla 8086 — Filip Świstowski	
 
+https://filipswistowski.github.io/Symulator-8086/
+
 ## Cel projektu
 Celem projektu jest wykonanie prostego symulatora wybranych rozkazów procesora 8086: MOV i XCHG dla rejestrów AX, BX, CX, DX oraz MOV dla transferu pamięć↔rejestr.
 
